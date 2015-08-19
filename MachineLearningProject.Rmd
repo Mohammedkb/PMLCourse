@@ -1,0 +1,210 @@
+---
+title: Using Machine Learning to Recognize the Quality of Performing Weight Lifting
+  Exercise
+author: "Mohammed K. Barakat"
+date: "August 18, 2015"
+output: word_document
+---
+
+## Executive Summary
+
+This Human Activity Recognition analysis is focused on recognizing the quality of performing weight lifting exercises. The approach used aims at investigating "how (well)" an activity is performed by the participant.
+
+Six young participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: according to specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D), and throwing the hips to the front (Class E). Class A corresponds to the specified (ideal) execution of the exercise, while the other 4 classes correspond to common mistakes.
+
+Using the **classe** variable as outcome, and some other variables in the **training** dataset as predictors the goal of this Machine Learning analysis is to predict the manner in which the participants did the exercise.
+
+More information about the research is available [here](http://groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).
+
+## Input data
+
+The analysis uses csv-formatted datasets available through the links [pml-training](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) and [pml-testing](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv). Both sets come from this [source](http://groupware.les.inf.puc-rio.br/har).
+
+The *pml-training* dataset consists of 19,622 records which will be divided into two sets: a *training* dataset that will be used to train the model for prediction, and a *testing* dataset to be used to validate the prediction model and decide on model accuracy. The *pml-testing* dataset consists of 20 new records to be used to submit prediction assignment associated with the Practical Machine Learning course project.  
+
+### Download datasets
+
+```{r Download raw data,echo=TRUE}
+trainURL<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testURL<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+trainFile<- "./pml-training.csv"
+testFile<-"./pml-testing.csv"
+
+if (file.exists(trainFile) == FALSE) {
+  download.file(trainURL, destfile = trainFile)
+}
+
+if (file.exists(testFile) == FALSE) {
+  download.file(testURL, destfile = testFile)
+}
+```
+
+### Data processing
+
+In order to perform the best model training analysis the datasets need to be pre-processed for any missing values. Hence, datasets are read while considering values of "NA", "#DIV/0!", and blanks as NA/missing values recognized by R during analysis.
+
+```{r Read files,echo=TRUE}
+pmlTrain <- read.csv(file = 'pml-training.csv',na.strings = c('NA','#DIV/0!',''))
+pmlTest <- read.csv(file = 'pml-testing.csv',na.strings = c('NA','#DIV/0!',''))
+```
+
+## Exploratory data analysis
+
+### Exploring the outcome variable
+
+A histogram is built on the pml-training dataset using the **classe** variable to have some clues on the frequency of this variable values across the dataset.
+
+```{r Histogram,echo=TRUE}
+library(ggplot2)
+g<-ggplot(pmlTrain,aes(x=classe))+
+        geom_histogram(alpha = .20, binwidth=.5, colour = "black")+
+        labs(x="Classe",y="Frequency")+
+        scale_y_continuous(breaks=seq(0, 5000, 500))+
+        theme(plot.title = element_text(size = 14, face = "bold", colour = "black", vjust = +1))+        
+        ggtitle(expression(atop("Histogram representing the frequency of Classe outcome",
+                                atop(italic("Training dataset")))))
+g
+```
+
+The histogram above shows that **classe** variable has five possible values; A, B, C, D, and E. Class-A which represents the ideal weight-lifting fashion has the highest number of observations (around 5,500), whereas others fashions have close number of observations (around 3,500).
+
+## Features selection
+
+### Feature Slicer
+
+Using the **head(pmlTrain)** or **str(pmlTrain)** functions in R we can detect some variables that do not contribute to the outcome classification model. Such variables would even make modelling inaccurate. Hence, variables with **NA** values will be removed using a feature slicer index which is a character vector that acts as a filter for valid variables without NAs, and which will be deployed when needed in both the training and the testing datasets. Besides, the first 7 columns are recognized to be irrelevant that can also be removed from the datasets.
+
+```{r Feature Slicer,echo=TRUE}
+featureSlice <- colnames(pmlTrain[colSums(is.na(pmlTrain)) == 0])
+featureSlice <- featureSlice[-c(1:7)]
+```
+
+### Partitioning training and testing datasets
+
+To train our prediction model then test its accuracy we need to split the **pml-Training** dataset into training and testing data (70/30 ratio) while applying the feature slicer filter.
+
+```{r Split data,echo=TRUE,message=FALSE}
+library(caret)
+set.seed(3030)
+inTrain<-createDataPartition(y=pmlTrain$classe,p=0.7,list = FALSE)
+training<-pmlTrain[inTrain,featureSlice]
+testing<-pmlTrain[-inTrain,featureSlice]
+
+dim(training);dim(testing)
+```
+
+```{r hidden1,echo=FALSE}
+varsDim<-dim(training)[2]
+trainRows<-dim(training)[1]
+testRows<-dim(testing)[1]
+```
+
+Both resulted datasets have **`r varsDim`** variables with **`r trainRows`** observations for training and **`r testRows`** observations for testing.
+
+### Checking variables variability
+
+It is a good practice to make sure the training data does not include predictors with no variability. I.e. predictors that have one or very few unique values relative to the number of observations. This can be detected with the **nzv** value of the **NearZeroVar** function results. 
+
+```{r nzv,echo=TRUE}
+nearZeroVar(training,saveMetrics = TRUE)
+```
+
+As shown above all selected predictors have FALSE **nzv** value which indicates that all of them have reasonable variability in the dataset.
+
+## Prediction Algorithms
+
+Since the outcome (**classe**) is a categorical variable our algorithm should be based on one of those which are able to model categorical rather than regression models such as **glm, Tree, and Random Forest.** Yet, the **glm** requires further complicated preprocessing of the outcome variable as it is designed to model 2-value/binary values data whereas the **classe** variable have five different values.
+
+Hence, we will start with deploying the **Classification Tree** algorithm and test its accuracy in predicting the outcome.
+
+### Training using Classification Tree with cross validation
+
+#### Training the model
+
+In order to increase the accuracy of our algorithm we will train our model using the built-in option of cross validation in the Classification Tree. Cross validation is employed here with 5 resampling iterations. The code result below shows the outcome model of training using the classification tree algorithm.
+
+```{r train model with rpart, echo=TRUE}
+set.seed(1320)
+modFit1<-train(classe~ .,data=training,method="rpart",trControl= trainControl(method = "cv",number = 5,allowParallel = TRUE))
+
+modFit1$finalModel
+```
+
+#### Evaluating the classification tree model and cross validation
+
+After training the model we evaluate it using the testing dataset, which is another cross validation step, then compare its outcome to the testing data actual outcome using the **Confusion Matrix**.
+
+```{r Tree prediction,echo=TRUE,message=FALSE}
+treePred<-predict(modFit1,testing)
+treeCM<-confusionMatrix(treePred,testing$classe)
+treeCM
+```
+
+```{r tree accuracy,echo=TRUE}
+modFit1Acc<-round(as.numeric(treeCM$overall[1]),4)
+modFit1Err<-round(1-modFit1Acc,4)
+
+modFit1Acc;modFit1Err
+```
+
+Unfortunately, the confusion matrix revealed a very low accuracy (**`r modFit1Acc`**). Knowing that the out-of-sample (Generalization) error equals (1-Accuracy) the out-of-sample error is estimated to be high with a value of **`r modFit1Err`**. This implies that the classification tree is a weak prediction algorithm for this dataset and we need to look for another algorithm type.
+
+### Training using Random Forest with cross validation
+
+#### Training the model
+
+Random Forest algorithm is known for its high accuracy in prediction where the algorithm grows multiple trees and vote for the best classifier. Hence, the next step is to train our model using Random Forest with cross validation of 5 resampling iterations.
+
+```{r train model with RF, echo=TRUE}
+set.seed(1400)
+modFit2<-train(classe~ .,data=training,method="rf",trControl= trainControl(method = "cv",number = 5,allowParallel = TRUE))
+```
+
+#### Variables Importance
+
+It is worth seeing how predictors are ranked in terms of importance after training the model. This can be achieved with the below plot of the top 20 predictors.
+
+```{r vars importance,echo=TRUE,message=FALSE}
+varsImp<-varImp(modFit2,scale = FALSE)
+varsImp
+
+plot(varsImp,top = 20,main="Variable Importance")
+```
+
+#### Evaluating the Random Forest model and cross validation
+
+As we did with the previous algorithm, we apply cross validation by testing the Random Forest model on the testing dataset then compare its outcome to the actual outcome of the testing data using the **Confusion Matrix**.
+
+```{r Predict testing,echo=TRUE}
+set.seed(1420)
+rfPred<-predict(modFit2,testing)
+rfCM<-confusionMatrix(rfPred,testing$classe)
+rfCM
+```
+
+```{r RF accuracy,echo=TRUE}
+modFit2Acc<-round(as.numeric(rfCM$overall[1]),4)
+modFit2Err<-round(1-modFit2Acc,4)
+
+modFit2Acc;modFit2Err
+```
+
+Here, the confusion matrix revealed a very high accuracy (**`r modFit2Acc`**). Knowing that the out-of-sample (Generalization) error equals (1-Accuracy) the out-of-sample error is estimated to be very low with a value of **`r modFit2Err`**. This implies that the Random Forest is a strong prediction algorithm for this dataset and can be used to predict new datasets.
+
+## Applying the selected model on a new dataset
+
+The selected model will be used to predict the outcome of the *pml-testing* dataset that consists of 20 new observations. Yet, since columns of the new dataset must be identical to those used for training the model we need to rename the last column to *"classe"* then we apply prediction.
+
+```{r pml-test colRename,echo=TRUE}
+lastColNumber<-length(colnames(pmlTest))
+colnames(pmlTest)[lastColNumber]<-"classe"
+```
+
+Notice that we need to apply the same preprocessing we did on the training dataset to the new dataset. So, we pass the feature slicer index to the dataset during prediction as shown in the code below.
+
+```{r pml-test predict,echo=TRUE}
+predict(modFit2,newdata = pmlTest[,featureSlice])
+```
+
+The selected model was able to predict the outcome value for each of the 20 observations in the *pml-testing* dataset.
